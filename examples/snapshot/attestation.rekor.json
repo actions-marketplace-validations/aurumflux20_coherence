@@ -1,0 +1,8 @@
+{
+  "log": "https://rekor.sigstore.dev",
+  "uuid": "108e9186e8c5677ab0ba480906ce8b99b0921fa1ae5cbd14bd04b76f956c2641ff550b00b9407a29",
+  "logIndex": 2775983720,
+  "integratedTime": 1789004890,
+  "logID": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
+  "payload_sha256": "5df3c4b17dc5181e4043e28bdeb9f81c4ff735aef01a7fbd0dfd16c4f454a543"
+}

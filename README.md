@@ -3,6 +3,64 @@
 [![CI](https://github.com/aurumflux20/coherence/actions/workflows/ci.yml/badge.svg)](https://github.com/aurumflux20/coherence/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://img.shields.io/pypi/v/coherence-check.svg)](https://pypi.org/project/coherence-check/)
+[![PyPI pyversions](https://img.shields.io/pypi/pyversions/coherence-check.svg)](https://pypi.org/project/coherence-check/)
+[![Stars](https://img.shields.io/github/stars/aurumflux20/coherence)](https://github.com/aurumflux20/coherence)
+
+
+## Sign a conformance run
+
+A battery prints a scorecard. A scorecard is a claim by whoever ran it — which
+is the same problem a signed record exists to solve. `coherence conformance`
+turns a [`hostile-facilitator`](https://github.com/aurumflux20/hostile-facilitator)
+run into a record a third party can check:
+
+```bash
+hostile-facilitator test --json result.json -- ./make-one-purchase.sh
+coherence conformance result.json --out session.json     # exit 1 if the client double-paid
+coherence attest --session session.json --key <key> --anchor rekor
+```
+
+A mode where the client settled twice is recorded **open**, never proven — so a
+failing run cannot be signed as an all-green one, by us or by anyone. A real
+example, including the attempt to launder it:
+[`examples/conformance/`](examples/conformance/).
+
+
+## What Coherence is for
+
+An agent writes code, runs a command, and reports back: *"Tests pass. Done."* But "done" was a sentence in a chat window, not an exit code. Coherence records the difference between **what an agent claimed** and **what it actually proved**, and refuses to call anything done without evidence.
+
+This holds for any agent-written work — tests, builds, migrations, deploys, research, reports. Money-path PRs are simply where a false "done" costs the most.
+
+### Coherence is not Seal
+
+[Seal](https://github.com/aurumflux20/seal) and [EffectFence](https://github.com/aurumflux20/effectfence) stop an action from firing twice **while it happens** — runtime enforcement, on money movement. Coherence never touches your runtime: it reads the record **afterwards** and grades claim against evidence. **Prevention versus proof.** Different problems, different code, no overlap. Use either, or both.
+
+## Offers
+
+**Proof Gate — $2,500 (prepaid).** A required GitHub check on agent-written PRs — strongest on billing/Stripe/payout paths, where a false "done" is most expensive. 5 business days async. Email only. No calls.
+Pay: https://buy.stripe.com/bJecN5elWfLy9lMgWfdIA0p
+
+**Agent Honesty Snapshot — $297 (prepaid).** 48h Markdown + Loom on 1–2 redacted agent sessions. Email only. No calls. Full refund if nothing material.
+Pay: https://buy.stripe.com/3cI00jelW56U1Tk7lFdIA0n
+
+### The signed record — what you can't issue yourself
+
+The free gate is a self-claim with a good seal on it: the session is hash-chained, so editing it is *detectable*, but anyone can regenerate a consistent chain from scratch. A self-administered pass is a declaration, not a verification.
+
+`coherence attest` signs the chain head with an issuer key and emits a **DSSE envelope carrying an in-toto v1 Statement** — the format SLSA and in-toto tooling already consume. `coherence verify` checks it with nothing but the envelope and a public key, and when the session file is present it also binds the record to that exact file by digest and recomputes the chain. `coherence attest-selftest` is the mutation control: a tampered session, a wrong key, and an edited payload must each fail, or the instrument is lying.
+
+```bash
+pip install "coherence-check[attest]"
+coherence keygen                                  # issuer keypair (share the .pub, never the .key)
+coherence attest --issuer "you@example.com"       # signs .coherence/session.json -> .coherence/attestation.json
+coherence verify .coherence/attestation.json --pub .coherence/keys/coherence-attest.pub --session .coherence/session.json
+```
+
+Add `--anchor rekor` and the envelope is also submitted to Sigstore's public Rekor transparency log, which records an integrated time and an inclusion proof that neither the issuer nor the verifier controls — so a record can't be backdated. `coherence verify … --rekor attestation.rekor.json` re-fetches the entry and binds it to this exact envelope by payload hash.
+
+Self-signing proves the record wasn't edited after *you* signed it. The paid tier is the signature that isn't yours: we run the gate, we sign the result under the AurumFlux key, and anyone can verify it against our published public key without trusting you or us.
 
 ### Your agent says the work is done. This makes it prove it.
 

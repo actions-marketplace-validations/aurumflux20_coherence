@@ -281,6 +281,11 @@ def cmd_audit(argv: list[str]) -> int:
                    help="audit a bundled sample session — no setup needed; "
                         "shows all four verdicts, including a caught lie")
     p.add_argument("--json", action="store_true", dest="as_json")
+    p.add_argument("--out", default="",
+                   help="also write the audit as a hash-chained session that "
+                        "`coherence attest` can sign — a claim the transcript "
+                        "contradicts is recorded OPEN, never proven")
+    p.add_argument("--title", default="", help="title recorded in the session")
     args = p.parse_args(argv)
     from coherence.audit.transcript import (
         audit_transcript, SUPPORTED, WEAK, UNSUPPORTED, CONTRADICTED)
@@ -296,6 +301,16 @@ def cmd_audit(argv: list[str]) -> int:
     if not _t.exists() or not _t.is_file():
         print(f"error: not a readable file: {args.transcript}", file=sys.stderr)
         return 3
+    if args.out:
+        # Record first: from_audit refuses a file that is not a transcript, so a
+        # session is never written over something we could not read.
+        from coherence.audit.session import from_audit
+        from pathlib import Path as _PP
+        summary = from_audit(_PP(args.transcript), _PP(args.out), title=args.title)
+        print(json.dumps(summary, indent=2))
+        print(f"\nwrote {args.out} — sign it with:\n"
+              f"  coherence attest --session {args.out} --key <your key> "
+              f"--out attestation.json --anchor rekor")
     a = audit_transcript(args.transcript)
     # A file we could not read as a transcript must never print like a clean
     # audit. Say so, and exit non-zero.
@@ -309,6 +324,7 @@ def cmd_audit(argv: list[str]) -> int:
     if args.as_json:
         print(json.dumps({
             "commands": a.commands, "claims": len(a.claims), "counts": c,
+            "not_asserted": a.not_asserted,
             "findings": [vars(x) for x in a.claims
                          if x.verdict in (UNSUPPORTED, CONTRADICTED, WEAK)],
         }, indent=2))
@@ -317,6 +333,9 @@ def cmd_audit(argv: list[str]) -> int:
     print(f"  supported     {c[SUPPORTED]}")
     print(f"  weak evidence {c[WEAK]}   (piped exit codes — pytest | tail class)")
     print(f"  unsupported   {c[UNSUPPORTED]}   (claims resting on nothing)")
+    if a.not_asserted:
+        print(f"  not a claim   {a.not_asserted}   (questions, negations, intentions — "
+              f"mentioned success without asserting it)")
     print(f"  CONTRADICTED  {c[CONTRADICTED]}   (claimed success; its own transcript says failure)")
     for x in a.claims:
         if x.verdict == CONTRADICTED:
@@ -375,6 +394,21 @@ def cmd_exit(session: Path) -> int:
     if integ["status"] == "tampered":
         return 3
     return check_exit_code(store.load(), strict=True)
+
+
+def cmd_checklist(argv: list[str]) -> int:
+    """Consequential claims (money, deploy, data, security) must carry proof."""
+    from coherence.checklist import ALL, checklist, format_checklist
+
+    p = argparse.ArgumentParser(prog="coherence checklist")
+    p.add_argument("--session", default=str(DEFAULT_SESSION))
+    p.add_argument("--profile", default="all", help="comma-separated profiles, or all")
+    p.add_argument("--json", action="store_true")
+    args = p.parse_args(argv)
+    profiles = ALL if args.profile == "all" else tuple(x.strip() for x in args.profile.split(",") if x.strip())
+    report = checklist(SessionStore(args.session).load(), profiles)
+    print(json.dumps(report, indent=2) if args.json else format_checklist(report))
+    return 0 if report["ok"] else 1
 
 
 def cmd_report(argv: list[str]) -> int:
@@ -451,19 +485,74 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(cmd_audit(rest))
     if cmd in ("tamper-demo", "tamper_demo", "tamper"):
         raise SystemExit(cmd_tamper_demo(rest))
+    if cmd == "keygen":
+        from coherence.attest import keygen
+        ap = argparse.ArgumentParser(prog="coherence keygen"); ap.add_argument("--out", default=".coherence/keys")
+        a = ap.parse_args(rest); k, pub = keygen(Path(a.out))
+        print(f"private key: {k}\npublic key:  {pub}\nshare the public key; never the private one."); raise SystemExit(0)
+    if cmd == "attest":
+        from coherence.attest import attest
+        ap = argparse.ArgumentParser(prog="coherence attest")
+        ap.add_argument("--session", default=".coherence/session.json"); ap.add_argument("--key", default=".coherence/keys/coherence-attest.key")
+        ap.add_argument("--out", default=".coherence/attestation.json"); ap.add_argument("--issuer", default="")
+        ap.add_argument("--anchor", choices=["rekor"], default=None, help="also submit to a public transparency log")
+        ap.add_argument("--pub", default=None, help="public key (needed for --anchor); defaults beside --key")
+        a = ap.parse_args(rest); r = attest(Path(a.session), Path(a.key), Path(a.out), issuer=a.issuer)
+        if a.anchor == "rekor":
+            from coherence.attest.anchor import anchor
+            pub = Path(a.pub) if a.pub else Path(a.key).with_suffix(".pub")
+            r["anchor"] = anchor(Path(a.out), pub)
+        print(json.dumps(r, indent=2)); raise SystemExit(0 if r.get("anchor", {}).get("status", "anchored") in ("anchored", "exists") else 1)
+    if cmd == "verify":
+        from coherence.attest import verify
+        ap = argparse.ArgumentParser(prog="coherence verify"); ap.add_argument("envelope")
+        ap.add_argument("--pub", required=True); ap.add_argument("--session", default=None)
+        ap.add_argument("--rekor", default=None, help="sidecar written by attest --anchor rekor; re-checks the log entry")
+        a = ap.parse_args(rest); r = verify(a.envelope, a.pub, a.session if a.session else None)
+        ok = r.get("status") == "verified"
+        if a.rekor:
+            from coherence.attest.anchor import check_anchor
+            r["anchor"] = check_anchor(a.envelope, a.rekor)
+            ok = ok and r["anchor"].get("status") == "anchored"
+        print(json.dumps(r, indent=2)); raise SystemExit(0 if ok else 1)
+    if cmd in ("attest-selftest", "attest_selftest"):
+        from coherence.attest import selftest
+        r = selftest(); print(json.dumps(r, indent=2)); raise SystemExit(0 if r.get("instrument") == "honest" else 3)
+    if cmd == "conformance":
+        from coherence.conformance import from_result
+        ap = argparse.ArgumentParser(prog="coherence conformance",
+            description="Record a hostile-facilitator run as a signable session. "
+                        "A mode that double-paid is recorded OPEN, never proven.")
+        ap.add_argument("result", help="result document written by: hostile-facilitator test --json PATH")
+        ap.add_argument("--out", default=".coherence/session.json", help="session file to write")
+        ap.add_argument("--title", default="", help="title recorded in the session")
+        a = ap.parse_args(rest)
+        r = from_result(Path(a.result), Path(a.out), title=a.title)
+        print(json.dumps(r, indent=2))
+        # exit 1 when the run itself failed, so a pipeline stops on a client
+        # that double-pays; the record is written either way.
+        raise SystemExit(0 if r.get("verdict") == "PASS" else 1)
+    if cmd == "checklist":
+        raise SystemExit(cmd_checklist(rest))
     if cmd == "report":
         raise SystemExit(cmd_report(rest))
     if cmd in ("-h", "--help", "help"):
         print(
             "Usage: python -m coherence <command>\n"
             "  law | demo | evolve | storm | health\n"
+            "  conformance RESULT --out SESSION   record a hostile-facilitator run\n"
             "  said CLAIM --next NEXT\n"
             "  prove-cmd 'pytest -q'\n"
             "  tamper-demo   (10s: forge a green, watch it get caught)\n"
-            "  audit FILE.jsonl   (agent transcript: claims vs. what actually ran)\n"
+            "  audit FILE.jsonl [--out SESSION]   (agent transcript: claims vs. what actually ran)\n"
             "  scope FILE.jsonl   (blast radius: what it touched + what we cannot see)\n"
             "  check [--no-strict]\n"
             "  report [--json] [--out file.md]\n"
+            "  checklist [--profile money,deploy,data,security|all] [--json]   (consequential claims must carry proof)\n"
+            "  keygen [--out DIR]                (issuer keypair; extra: coherence-check[attest])\n"
+            "  attest [--session P] [--key P] [--anchor rekor]   (sign the chain head; optionally timestamp it in Sigstore Rekor)\n"
+            "  verify ENVELOPE --pub P [--session P] [--rekor SIDECAR]  (record + public key only; --rekor re-checks the log)\n"
+            "  attest-selftest                   (mutation control: tampered/wrong-key/edited must fail)\n"
         )
         raise SystemExit(0)
     print(f"Unknown command: {cmd}. Try: law | demo | prove-cmd | check | report", file=sys.stderr)
